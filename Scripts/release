@@ -4,8 +4,40 @@ set -euo pipefail
 
 # Constants
 ROOTDIR="$PWD"
-OPTMODDIR="modules/optional"
+OPTMODDIR="${ROOTDIR}/modules/optional"
 OUTPUTDIR="output-MinGW-i386"
+OPTIONALURL="https://svn.reactos.org/optional"
+REQUIREDFILES=(
+    "DroidSansFallback.ttf"
+    "wine_gecko*.msi"
+    "winevdm_setup.exe"
+)
+
+download_required_files() {
+    accept=$(IFS=,; echo "${REQUIREDFILES[*]}")
+
+    if ! wget -r -np -nd -nH \
+         -A "${accept}" \
+         "${OPTIONALURL}/"; then
+        echo
+        echo "FAILED: Could not reach ${OPTIONALURL}"
+        return 1
+    fi
+}
+
+check_required_files() {
+    if [ ! -d "${OPTMODDIR}" ]; then
+        return 1
+    fi
+
+    for file in "${REQUIREDFILES[@]}"; do
+        if ! compgen -G "${OPTMODDIR}/${file}" > /dev/null; then
+            return 1
+        fi
+    done
+
+    return 0
+}
 
 echo
 echo "*******************************************************************************"
@@ -26,11 +58,10 @@ if [ ! -d "${ROOTDIR}/.git" ]; then
 fi
 
 # Check for internet connection.
-wget -q --spider https://reactos.org
-
-if [ $? -eq 0 ]; then
+if wget -q --spider https://reactos.org; then
     internet=true
 else
+    internet=false
     echo "Warning: No internet connection detected."
     echo "Optional modules cannot be downloaded and origin cannot be fetched."
     echo
@@ -56,7 +87,7 @@ fi
 # Clean repository, excluding the modules/optional folder and its contents.
 git clean -d -f -f -x --exclude="/modules/optional/*"
 # Fetch changes from origin if we have an internet connection.
-if [ "$internet" ]; then
+if $internet; then
     git fetch origin
 fi
 # Reset to the head of the branch
@@ -65,29 +96,25 @@ echo
 
 # Download the "optional" folder from svn.reactos.org if it isn't already downloaded.
 # Ensure the optional modules folder is there and contains the modules we need.
-if [ -d "${OPTMODDIR}" ] && [ -f "${OPTMODDIR}/DroidSansFallback.ttf" ] && compgen -G "${OPTMODDIR}/wine_gecko*.msi" > /dev/null; then
+if check_required_files; then
     echo "Optional modules already downloaded. Skipping."
     echo "If you have an issue with the optional modules, re-run this script after deleting the directory:"
-    echo "    ${ROOTDIR}/${OPTMODDIR}"
-elif [ "${internet}" ]; then
+    echo "    ${OPTMODDIR}"
+elif $internet; then
     echo "Downloading optional modules..."
     if [ -d "${OPTMODDIR}" ]; then
         rm -rf "${OPTMODDIR}"
     fi
     mkdir "${OPTMODDIR}"
     cd "${OPTMODDIR}"
-    wget --recursive --level=1 --no-directories --no-parent --execute robots=off "https://svn.reactos.org/optional"
+    download_required_files
     # Check that all mandatory files were downloaded.
-    if [ ! -f "DroidSansFallback.ttf" ]; then
-        echo "DroidSansFallback CJK font missing!"
-        exit 1
-    fi
-    if ! compgen -G "wine_gecko*.msi" > /dev/null; then
-        echo "wine_gecko MSI package missing!"
+    if ! check_required_files; then
+        echo "FAILED: One or more required files are missing."
         exit 1
     fi
 else
-    echo "FAILED: Missing optional modules and no internet connection."
+    echo "FAILED: Missing required files and no internet connection to download them."
     exit 1
 fi
 echo
@@ -117,7 +144,7 @@ cd "${ROOTDIR}"
 git archive --format=zip --prefix="${EXPORTDIR}/" -9 --output="${ROOTDIR}/${DELIVERDIR}/${SOURCEZIP}" "$(git rev-parse HEAD)"
 
 # We're done!
-if [ -z "$internet" ]; then
+if ! $internet; then
     echo
     echo "Warning: No internet connection. HEAD may be stale."
     echo "    HEAD: $(git describe)"
